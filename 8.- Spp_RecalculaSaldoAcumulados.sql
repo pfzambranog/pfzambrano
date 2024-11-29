@@ -37,14 +37,17 @@ As
 
 Declare
    @w_tabla                   Sysname,
-   @w_tablaAux                Sysname,
+   @w_tablaAnt                Sysname,
    @w_anioIni                 Integer,
    @w_anioFin                 Integer,
+   @w_anioAnte                Integer,
    @w_error                   Integer,
    @w_registros               Integer,
+   @w_secuencia               Integer,
    @w_operacion               Integer,
    @w_mesIni                  Tinyint,
    @w_mesFin                  Tinyint,
+   @w_mesAnte                 Integer,
    @w_mes                     Tinyint,
    @w_linea                   Integer,
    @w_comilla                 Char(1),
@@ -90,31 +93,12 @@ Begin
 -- Creación de Tablas Temporales.
 --
 
-   Create Table #TempSaldos
-  (anio          Smallint       Not Null,
+   Create table #TempControl
+  (secuencia    Integer Not Null Identity (1, 1) Primary Key,
+   anio          Smallint       Not Null,
    mes           Tinyint        Not Null,
    tabla         Sysname        Not Null,
-   llave         Varchar(20)    Not Null,
-   moneda        Varchar( 2)    Not Null,
-   Sant          Decimal(18, 2) Not Null,
-   car           Decimal(18, 2) Not Null,
-   Abo           Decimal(18, 2) Not Null,
-   Sact          Decimal(18, 2) Not Null Default  0,
-   Primary Key (anio, mes, tabla, llave, moneda));
-
-   Create Table #TempSaldosAux
-  (anio          Smallint       Not Null,
-   mes           Tinyint        Not Null,
-   tabla         Sysname        Not Null,
-   llave         Varchar(20)    Not Null,
-   moneda        Varchar( 2)    Not Null,
-   Sector_id     Nvarchar(4)    Not Null,
-   Sucursal_id   Integer        Not Null,
-   Sant          Decimal(18, 2) Not Null,
-   car           Decimal(18, 2) Not Null,
-   Abo           Decimal(18, 2) Not Null,
-   Sact          Decimal(18, 2) Not Null Default  0,
-   Primary Key (anio, mes, tabla, llave, moneda, Sector_id, Sucursal_id));
+   tablaAnt      Sysname            Null);
 
 --
 -- Inicio Proceso
@@ -127,80 +111,203 @@ Begin
           While @w_mes <= @w_mesFin
           Begin
              Select @w_registros   = 0,
+                    @w_secuencia   = 0,
                     @w_chmes       = dbo.Fn_BuscaMes (@w_mes, 2),
+                    @w_mesAnte     = @w_mes -1,
+                    @w_anioAnte    = @w_anioIni,
                     @w_tabla       = Case When @w_mes = 0
                                           Then Concat('catIni', @w_anioIni)
                                           When @w_mes = 13
-                                          Then Concat('catFin', @w_anioIni)
+                                          Then Concat('catCie', @w_anioIni)
                                           Else Concat('cat', @w_chmes, @w_anioIni)
-                                     End,
-                    @w_tablaAux    = Case When @w_mes = 0
-                                          Then Concat('catAuxIni', @w_anioIni)
-                                          When @w_mes = 13
-                                          Then Concat('catAuxFin', @w_anioIni)
-                                          Else Concat('catAux', @w_chmes, @w_anioIni)
                                      End;
+
+             If @w_mesAnte < @w_mesIni
+                Begin
+                   Select @w_mesAnte  = @w_mesFin,
+                          @w_anioAnte = @w_anioAnte -1;
+                End
+
+             Select  @w_chmes    = dbo.Fn_BuscaMes (@w_mesAnte, 2),
+                     @w_tablaAnt = Case When @w_mesAnte = 0
+                                        Then Concat('catIni', @w_anioAnte)
+                                        When @w_mesAnte = 13
+                                        Then Concat('catCie', @w_anioAnte)
+                                        Else Concat('cat', @w_chmes, @w_anioAnte)
+                                   End;
 
              If Ejercicio_DES.dbo.Fn_existe_tabla( @w_tabla ) = 0
                 Begin
                    Goto Siguiente
                 End
 
+             Insert Into #TempControl
+            (anio, mes, tabla, tablaAnt)
+             Select @w_anioIni, @w_mes, @w_tabla, @w_tablaAnt;
+             Set @w_registros = @@Identity
 
-             If @w_sucursable != 2
+Siguiente:
+
+             Set @w_mes = @w_mes + 1;
+
+             If @w_mes > @w_mesFin
                 Begin
-                   Set @w_existeAux = 0;
-                End
-             Else
-                Begin
-                   Set @w_existeAux = Ejercicio_DES.dbo.Fn_existe_tabla(@w_tablaAux);
-                End;
+                   Select @w_mes     = @w_mesIni,
+                          @w_anioIni = @w_anioIni + 1;
 
---
--- Actualiza saldo inicial cat
---
-             Set @w_sql = Concat('Update dbo.', @w_tabla, ' ',
-                                 'Set    Sant = b.Sact ',
-                                 'From   dbo.', @w_tabla, ' a With (Nolock) ',
-                                 'Join   #TempSaldos        b ',
-                                 'On     b.llave  = a.llave ',
-                                 'And    b.moneda = a.moneda');
+                   If @w_anioIni > @w_anioFin
+                      Begin
+                         Set @w_x = 1
+                         Break
+                      End
 
-             Begin Try
-                Execute (@w_sql)
-             End Try
-
-             Begin Catch
-                Select  @w_Error      = @@Error,
-                        @w_linea      = Error_line(),
-                        @w_desc_error = Substring (Error_Message(), 1, 200)
-
-             End Catch
-
-             If IsNull(@w_error, 0) <> 0
-                Begin
-                   Rollback Transaction
-                   Select @PnEstatus = @w_error,
-                          @PsMensaje = Concat('Error.: ', @w_Error, ' ', @w_desc_error, ' en Línea ', @w_linea);
-
-                   Set Xact_Abort Off
-                   Goto Salida
                 End
 
---
+          End
+
+       End
+
+       While @w_secuencia < @w_registros
+       Begin
+          Select @w_secuencia += 1;
+
+          Select @w_tabla    = tabla,
+                 @w_tablaAnt = tablaAnt
+          From   #TempControl
+          Where  secuencia = @w_secuencia;
+          If @@Rowcount = 0
+             Begin
+                Break
+             End
+
+         If @w_secuencia = 1
+            Begin
+               Set @w_sql = Concat('Update a ',
+                                   'Set    Sact = SAnt + car - Abo ',
+                                   'From   dbo.', @w_tabla, ' a With (Nolock) ')
+
+               Begin Try
+                  Execute (@w_sql)
+               End   Try
+
+               Begin Catch
+                  Select  @w_Error      = @@Error,
+                          @w_linea      = Error_line(),
+                          @w_desc_error = Substring (Error_Message(), 1, 200)
+
+               End Catch
+
+               If IsNull(@w_error, 0) <> 0
+                  Begin
+                     Rollback Transaction
+                     Select @PnEstatus = @w_error,
+                            @PsMensaje = Concat('Error.: ', @w_Error, ' ', @w_desc_error, ' en Línea ', @w_linea);
+
+                     Set Xact_Abort Off
+                     Goto Salida
+                  End
+
+               If @w_sucursable = 2
+                  Begin
 
 --
--- Actualiza saldo inicial catAux
+-- Actualiza CatAux
 --
 
-             If @w_existeAux = 1
-                Begin
+                     Set @w_tabla = Replace(@w_tabla, 'cat', 'catAux');
+                     If  Ejercicio_DES.dbo.Fn_existe_tabla(@w_tabla) = 0
+                         Begin
+                            Goto Proximo
+                         End
+
+                     Set @w_sql = Concat('Update a ',
+                                         'Set    Sact = SAnt + car - Abo ',
+                                         'From   dbo.', @w_tabla, ' a With (Nolock) ')
+                     Begin Try
+                        Execute (@w_sql)
+                     End   Try
+
+                     Begin Catch
+                        Select  @w_Error      = @@Error,
+                                @w_linea      = Error_line(),
+                                @w_desc_error = Substring (Error_Message(), 1, 200)
+
+                     End Catch
+
+                     If IsNull(@w_error, 0) <> 0
+                        Begin
+                           Rollback Transaction
+                           Select @PnEstatus = @w_error,
+                                  @PsMensaje = Concat('Error.: ', @w_Error, ' ', @w_desc_error, ' en Línea ', @w_linea);
+
+                           Set Xact_Abort Off
+                           Goto Salida
+                        End
+
+                  End
+            End
+
+         Else
+            Begin
+               Set @w_sql = Concat('Update dbo.', @w_tabla, ' ',
+                                   'Set    Sant = b.Sact,     ',
+                                          'Sact = b.Sact + a.car - a.abo  ',
+                                   'From   dbo.', @w_tabla,    ' a With (Nolock) ',
+                                   'Join   dbo.', @w_tablaAnt, ' b With (Nolock) ',
+                                   'On     b.llave  = a.llave ',
+                                   'And    b.moneda = a.moneda ',
+                                   'And    b.Niv    = a.Niv');
+               Begin Try
+                  Execute (@w_sql)
+               End Try
+
+               Begin Catch
+                  Select  @w_Error      = @@Error,
+                          @w_linea      = Error_line(),
+                          @w_desc_error = Substring (Error_Message(), 1, 200)
+
+               End Catch
+
+               If IsNull(@w_error, 0) <> 0
+                  Begin
+                     Rollback Transaction
+                     Select @PnEstatus = @w_error,
+                            @PsMensaje = Concat('Error.: ', @w_Error, ' ', @w_desc_error, ' en Línea ', @w_linea);
+
+                     Set Xact_Abort Off
+                     Goto Salida
+                  End
+
+--
+
+               If @w_sucursable = 2
+                  Begin
+
+--
+-- Actualiza CatAux
+--
+
+                     Select @w_tablaAnt = Replace(@w_tablaAnt, 'cat', 'catAux'),
+                            @w_tabla    = Replace(@w_tabla,    'cat', 'catAux');
+
+                     If  Ejercicio_DES.dbo.Fn_existe_tabla(@w_tabla) = 0
+                         Begin
+                            Goto Proximo
+                         End
+                         
+                     If  Ejercicio_DES.dbo.Fn_existe_tabla(@w_tablaAnt) = 0
+                         Begin
+                            Goto Proximo
+                         End
+
                    Set @w_sql = Concat('Update dbo.', @w_tabla, ' ',
-                                       'Set    Sant = b.Sact ',
-                                       'From   dbo.', @w_tablaAux, ' a With (Nolock) ',
-                                       'Join   #TempSaldosAux        b ',
+                                       'Set    Sant = b.Sact, ',
+                                              'Sact = b.Sact + a.car - a.abo ',
+                                       'From   dbo.', @w_tabla,    ' a With (Nolock) ',
+                                       'Join   dbo.', @w_tablaAnt, ' b With (Nolock) ',
                                        'On     b.llave       = a.llave ',
                                        'And    b.moneda      = a.moneda ',
+                                       'And    b.Niv         = a.Niv ',
                                        'And    b.Sector_id   = a.Sector_id ',
                                        'And    b.Sucursal_id = a.Sucursal_id');
 
@@ -226,295 +333,9 @@ Begin
                       End
                 End
 
---
--- Inicializa temporal Cat
---
+            End
 
-             Set @w_sql = 'Truncate Table #TempSaldos'
-
-             Begin Try
-                Execute (@w_sql)
-             End Try
-
-             Begin Catch
-                Select  @w_Error      = @@Error,
-                        @w_linea      = Error_line(),
-                        @w_desc_error = Substring (Error_Message(), 1, 200)
-
-             End Catch
-
-             If IsNull(@w_error, 0) <> 0
-                Begin
-                   Rollback Transaction
-                   Select @PnEstatus = @w_error,
-                          @PsMensaje = Concat('Error.: ', @w_Error, ' ', @w_desc_error, ' en Línea ', @w_linea);
-
-                   Set Xact_Abort Off
-                   Goto Salida
-                End
-
---
--- Inicializa temporal CatAux
---
-
-             Set @w_sql = 'Truncate Table #TempSaldosAux'
-
-             Begin Try
-                Execute (@w_sql)
-             End Try
-
-             Begin Catch
-                Select  @w_Error      = @@Error,
-                        @w_linea      = Error_line(),
-                        @w_desc_error = Substring (Error_Message(), 1, 200)
-
-             End Catch
-
-             If IsNull(@w_error, 0) <> 0
-                Begin
-                   Rollback Transaction
-                   Select @PnEstatus = @w_error,
-                          @PsMensaje = Concat('Error.: ', @w_Error, ' ', @w_desc_error, ' en Línea ', @w_linea);
-
-                   Set Xact_Abort Off
-                   Goto Salida
-                End
-
---
--- Inserta datos de cat
---
-
-             Set @w_sql = Concat('Select ', @w_anioIni, ', ',  @w_mes,        ', ',
-                                            @w_comilla, @w_tabla, @w_comilla, ', ',
-                                           'llave, moneda , Sant, car, Abo ',
-                                 'From   dbo.', @w_tabla, ' With (Nolock)');
-
-             Begin Try
-                Insert Into #TempSaldos
-                (anio,    mes,  tabla, llave,
-                 moneda,  Sant, car,   Abo)
-                Execute (@w_sql)
-             End Try
-
-             Begin Catch
-                Select  @w_Error      = @@Error,
-                        @w_linea      = Error_line(),
-                        @w_desc_error = Substring (Error_Message(), 1, 200)
-
-             End Catch
-
-             If IsNull(@w_error, 0) <> 0
-                Begin
-                   Rollback Transaction
-                   Select @PnEstatus = @w_error,
-                          @PsMensaje = Concat('Error.: ', @w_Error, ' ', @w_desc_error, ' en Línea ', @w_linea);
-
-                   Set Xact_Abort Off
-                   Goto Salida
-                End
-
-             Update #TempSaldos
-             Set    Sact = Sant + car - Abo
-
-
---
--- Inserta datos de catAux
---
-
-             If @w_existeAux = 1
-                Begin
-                   Set @w_sql = Concat('Select ', @w_anioIni, ', ',  @w_mes,        ', ',
-                                                  @w_comilla, @w_tabla, @w_comilla, ', ',
-                                                 'llave, moneda , Sector_id, Sucursal_id, Sant, car, Abo ',
-                                       'From   dbo.', @w_tablaAux, ' With (Nolock)');
-
-                   Begin Try
-                      Insert Into #TempSaldosAux
-                      (anio,    mes,       tabla,       llave,
-                       moneda,  Sector_id, Sucursal_id, Sant,
-                       car,   Abo)
-                      Execute (@w_sql)
-                   End Try
-
-                   Begin Catch
-                      Select  @w_Error      = @@Error,
-                              @w_linea      = Error_line(),
-                              @w_desc_error = Substring (Error_Message(), 1, 200)
-
-                   End Catch
-
-                   If IsNull(@w_error, 0) <> 0
-                      Begin
-                         Rollback Transaction
-                         Select @PnEstatus = @w_error,
-                                @PsMensaje = Concat('Error.: ', @w_Error, ' ', @w_desc_error, ' en Línea ', @w_linea);
-
-                         Set Xact_Abort Off
-                         Goto Salida
-                      End
-                End
-
-             Update #TempSaldosAux
-             Set    Sact = Sant + car - Abo
-
---
---
---
-             If @w_mes = @PnMes
-                Begin
---
--- Actualiza Cat
---
-                   Set @w_sql = Concat('Update a ',
-                                       'Set    Sact = b.Sact ',
-                                       'From   dbo.', @w_tabla, ' a With (Nolock) ',
-                                       'Join   #TempSaldos b ',
-                                       'On     b.llave  = a.llave ',
-                                       'And    b.moneda = a.moneda')
-                   Begin Try
-                      Execute (@w_sql)
-                   End   Try
-
-                   Begin Catch
-                      Select  @w_Error      = @@Error,
-                              @w_linea      = Error_line(),
-                              @w_desc_error = Substring (Error_Message(), 1, 200)
-
-                   End Catch
-
-                   If IsNull(@w_error, 0) <> 0
-                      Begin
-                         Rollback Transaction
-                         Select @PnEstatus = @w_error,
-                                @PsMensaje = Concat('Error.: ', @w_Error, ' ', @w_desc_error, ' en Línea ', @w_linea);
-
-                         Set Xact_Abort Off
-                         Goto Salida
-                      End
-
-                   If @w_existeAux = 1
-                      Begin
---
--- Actualiza CatAux
---
-                          Set @w_sql = Concat('Update a ',
-                                              'Set    Sact = b.Sact ',
-                                              'From   dbo.', @w_tablaAux, ' a With (Nolock) ',
-                                              'Join   #TempSaldosAux b ',
-                                              'On     b.llave       = a.llave ',
-                                              'And    b.moneda      = a.moneda ',
-                                              'And    b.Sector_id   = a.Sector_id ',
-                                              'And    b.Sucursal_id = a.Sucursal_id')
-                          Begin Try
-                             Execute (@w_sql)
-                          End   Try
-
-                          Begin Catch
-                             Select  @w_Error      = @@Error,
-                                     @w_linea      = Error_line(),
-                                     @w_desc_error = Substring (Error_Message(), 1, 200)
-
-                          End Catch
-
-                          If IsNull(@w_error, 0) <> 0
-                             Begin
-                                Rollback Transaction
-                                Select @PnEstatus = @w_error,
-                                       @PsMensaje = Concat('Error.: ', @w_Error, ' ', @w_desc_error, ' en Línea ', @w_linea);
-
-                                Set Xact_Abort Off
-                                Goto Salida
-                             End
-                      End
-                End
-             Else
-                Begin
---
--- Actualiza Cat
---
-                   Set @w_sql = Concat('Update a ',
-                                       'Set    Sant = b.Sant, ',
-                                              'Sact = b.sant + b.car - b.abo ',
-                                       'From   dbo.', @w_tabla, ' a With (Nolock) ',
-                                       'Join   #TempSaldos b ',
-                                       'On     b.llave  = a.llave ',
-                                       'And    b.moneda = a.moneda')
-                   Begin Try
-                      Execute (@w_sql)
-                   End   Try
-
-                   Begin Catch
-                      Select  @w_Error      = @@Error,
-                              @w_linea      = Error_line(),
-                              @w_desc_error = Substring (Error_Message(), 1, 200)
-
-                   End Catch
-
-                   If IsNull(@w_error, 0) <> 0
-                      Begin
-                         Rollback Transaction
-                         Select @PnEstatus = @w_error,
-                                @PsMensaje = Concat('Error.: ', @w_Error, ' ', @w_desc_error, ' en Línea ', @w_linea);
-
-                         Set Xact_Abort Off
-                         Goto Salida
-                      End
-
---
--- Actualiza CatAux
---
-                   If @w_existeAux = 1
-                      Begin
-                         Set @w_sql = Concat('Update a ',
-                                             'Set    Sant = b.Sant, ',
-                                                    'Sact = b.sant + b.car - b.abo ',
-                                             'From   dbo.', @w_tablaAux, ' a With (Nolock) ',
-                                             'Join   #TempSaldosAux b ',
-                                             'On     b.llave       = a.llave ',
-                                             'And    b.moneda      = a.moneda ',
-                                             'And    b.Sector_id   = a.Sector_id ',
-                                             'And    b.Sucursal_id = a.Sucursal_id')
-                         Begin Try
-                            Execute (@w_sql)
-                         End   Try
-
-                         Begin Catch
-                            Select  @w_Error      = @@Error,
-                                    @w_linea      = Error_line(),
-                                    @w_desc_error = Substring (Error_Message(), 1, 200)
-
-                         End Catch
-
-                         If IsNull(@w_error, 0) <> 0
-                            Begin
-                               Rollback Transaction
-                               Select @PnEstatus = @w_error,
-                                      @PsMensaje = Concat('Error.: ', @w_Error, ' ', @w_desc_error, ' en Línea ', @w_linea);
-
-                               Set Xact_Abort Off
-                               Goto Salida
-                            End
-                      End
-
-                End
-
-Siguiente:
-
-             Set @w_mes = @w_mes + 1;
-
-             If @w_mes > @w_mesFin
-                Begin
-                   Select @w_mes     = @w_mesIni,
-                          @w_anioIni = @w_anioIni + 1;
-
-                   If @w_anioIni > @w_anioFin
-                      Begin
-                         Set @w_x = 1
-                         Break
-                      End
-
-                End
-          End
+Proximo:
 
        End
 
